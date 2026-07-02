@@ -3,6 +3,7 @@ import argparse
 from dotenv import load_dotenv
 from fabric import Connection
 from pathlib import Path
+import tarfile
 
 # Cargar variables de entorno
 load_dotenv()
@@ -18,30 +19,46 @@ DIRECTORIO_REMOTO = f"/work/{USER}/CPMP"
 # ---------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="Recupera archivos del servidor remoto vía SSH.")
-    parser.add_argument("archivos_remotos", nargs="+", help="Rutas completas de los archivos en el servidor")
+    parser = argparse.ArgumentParser(description="Recupera archivos o carpetas del servidor remoto.")
+    parser.add_argument("objetivos_remotos", nargs="+", help="Rutas completas de archivos o carpetas en el servidor")
     args = parser.parse_args()
 
     print(f"Conectando a {USER}@{HOST}...")
 
     try:
         with Connection(host=HOST, user=USER) as c:
-            for ruta_remota in args.archivos_remotos:
-                ruta_remota = f"{DIRECTORIO_REMOTO}/{ruta_remota}"
-
-                # Extraemos solo el nombre del archivo para la ruta local
-                nombre_archivo = os.path.basename(ruta_remota)
-                ruta_local_final = os.path.join(DESTINO_LOCAL, nombre_archivo)
-
-                print(f"Descargando: {ruta_remota} -> {ruta_local_final}")
+            for objetivo in args.objetivos_remotos:
+                ruta_remota = f"{DIRECTORIO_REMOTO}/{objetivo}".replace("//", "/")
+                nombre_base = os.path.basename(objetivo.rstrip('/'))
                 
+                # Nombre del comprimido y ruta local final
+                archivo_comprimido = f"{nombre_base}.tar.gz"
+                ruta_remota_comprimida = f"/tmp/{archivo_comprimido}" 
+                ruta_local_comprimida = os.path.join(DESTINO_LOCAL, archivo_comprimido)
+                ruta_local_final = os.path.join(DESTINO_LOCAL, nombre_base)
+
+                print(f"Preparando {ruta_remota}...")
+                
+                # 2. Comprimir en servidor
+                c.run(f"tar -czf {ruta_remota_comprimida} -C {os.path.dirname(ruta_remota)} {nombre_base}")
+
                 try:
-                    # El método .get() descarga del servidor al PC local
-                    c.get(ruta_remota, local=ruta_local_final)
-                except Exception as file_error:
-                    print(f"Error al descargar {ruta_remota}: {file_error}")
-            
-            print(f"\nProceso finalizado. Archivos guardados en: {os.path.abspath(DESTINO_LOCAL)}")
+                    print(f"Descargando: {archivo_comprimido}...")
+                    c.get(remote=ruta_remota_comprimida, local=ruta_local_comprimida)
+                    
+                    # 3. Descomprimir localmente
+                    print(f"Descomprimiendo en: {ruta_local_final}")
+                    with tarfile.open(ruta_local_comprimida, "r:gz") as tar:
+                        tar.extractall(path=DESTINO_LOCAL)
+                    
+                    # 4. Limpieza (borramos el .tar.gz local y el del servidor)
+                    os.remove(ruta_local_comprimida)
+                    c.run(f"rm {ruta_remota_comprimida}")
+                    
+                    print(f"✅ Éxito: {nombre_base} lista para usar.")
+                    
+                except Exception as e:
+                    print(f"❌ Error en el proceso: {e}")
 
     except Exception as e:
         print(f"\n[ERROR DE CONEXIÓN]: {e}")

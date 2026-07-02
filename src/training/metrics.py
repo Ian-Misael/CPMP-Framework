@@ -50,12 +50,18 @@ class Accuracy(Metric):
     
     def step(self, logits, y):
         batch_size = y.size(0)
-        # Obtenemos el índice de la predicción con mayor logit
+        
+        # 1. Índice de la acción predicha por el modelo (mayor logit)
         pred_indices = logits.argmax(dim=-1)
         
-        # Verificamos si la predicción está en una posición donde y es 1
-        # y[range(batch_size), pred_indices] selecciona el valor de y para la predicción hecha
-        correct = y[torch.arange(batch_size), pred_indices] == 1
+        # 2. Valor objetivo máximo real para cada muestra en el batch
+        max_target_vals, _ = y.max(dim=-1)
+        
+        # 3. Valor objetivo correspondiente específicamente a la acción que el modelo predijo
+        pred_target_vals = y[torch.arange(batch_size), pred_indices]
+        
+        # 4. Verificamos si el modelo predijo una acción que contiene el valor máximo
+        correct = (pred_target_vals == max_target_vals)
         
         self.total_correct += correct.sum().item()
         self.total_samples += batch_size

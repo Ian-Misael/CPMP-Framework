@@ -22,7 +22,7 @@ def get_feasible_moves(layout):
 
     return moves
     
-def get_best_moves(layout, H, max_steps):
+def get_moves_costs(layout, H, max_steps):
     moves = get_feasible_moves(layout)
 
     lay_copies = []
@@ -34,19 +34,19 @@ def get_best_moves(layout, H, max_steps):
     results = worker_solver.solve_from_layouts(lay_copies, H, max_steps)
     worker_solver.reset()
 
-    best_moves = []
+    all_moves_costs = []
     min_cost = float('inf')
 
-    for (move, (solved, cost)) in zip(moves, results):
-        if not solved: continue
+    for move, (solved, cost) in zip(moves, results):
+        if not solved: 
+            continue
 
         if cost < min_cost:
-            min_cost = cost
-            best_moves = [move]
-        elif cost == min_cost:
-            best_moves.append(move)
+            min_cost = cost + 1
             
-    return best_moves, min_cost + 1
+        all_moves_costs.append((move, cost + 1))
+            
+    return all_moves_costs, min_cost
 
 def generate_data_from_file(filepath):
     layout = read_instance(filepath, worker_H)
@@ -55,13 +55,13 @@ def generate_data_from_file(filepath):
 
     input_vec = worker_la_adapter.input_2_vec(layout, worker_H)
 
-    best_moves, cost = get_best_moves(layout, worker_H, worker_max_steps)
-    if len(best_moves) == 0:
+    moves_costs, best_cost = get_moves_costs(layout, worker_H, worker_max_steps)
+    if len(moves_costs) == 0:
         return None
 
-    output_vec = worker_ma_adapter.output_2_vec(best_moves, cost)
+    output_vec = worker_ma_adapter.output_2_vec(moves_costs)
 
-    return input_vec, output_vec, cost
+    return input_vec, output_vec, best_cost
 
 def generate_data(filepaths, input_adapter, output_adapter, init_worker, init_args, num_workers):
     with ProcessPoolExecutor(
