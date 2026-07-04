@@ -1,11 +1,10 @@
 from settings import INSTANCE_FOLDER, DATA_FOLDER
-from generation.instances import read_instance
+from instances import read_instance
 import copy
 import os
 import h5py
 import numpy as np
 from concurrent.futures import ProcessPoolExecutor
-from solvers.FRG import FRGSolver
 from solvers.model import ModelSolver
 import torch
 import random

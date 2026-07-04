@@ -1,8 +1,8 @@
 import numpy as np
 from scipy.stats import norm
 from scipy.optimize import nnls
-from generation.instances.instance_generator import InstanceGenerator
-from generation.instances import RandomMovesGenerator
+from instances.generators.instance_generator import InstanceGenerator
+from instances.generators.random_moves import RandomMovesGenerator
 from utils.utils import distribuir_suma_exacta
 
 class UniformCostGenerator(InstanceGenerator):

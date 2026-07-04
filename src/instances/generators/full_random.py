@@ -1,4 +1,4 @@
-from generation.instances.instance_generator import InstanceGenerator
+from instances.generators.instance_generator import InstanceGenerator
 
 class FullRandomGenerator(InstanceGenerator):
     def generate_instances(self, amount):

@@ -3,11 +3,7 @@ import shutil
 from settings import INSTANCE_FOLDER
 from cpmp.layout import Layout
 from solvers.FRG import FRGSolver
-from generation.instances.instance_generator import InstanceGenerator
-from generation.instances.generators.full_random import FullRandomGenerator
-from generation.instances.generators.random_moves import RandomMovesGenerator
-from generation.instances.generators.uniform_cost import UniformCostGenerator
-
+from instances.generators.instance_generator import InstanceGenerator
 
 def generate_instances(basename: str, generator: InstanceGenerator, amount: int):
     shutil.rmtree(INSTANCE_FOLDER / basename, ignore_errors=True)

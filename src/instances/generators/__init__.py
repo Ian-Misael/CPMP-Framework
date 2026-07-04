@@ -1,0 +1,4 @@
+from instances.generators.bad_placed_lb import BadPlacedUniformGenerator
+from instances.generators.random_moves import RandomMovesGenerator
+from instances.generators.uniform_cost import UniformCostGenerator
+from instances.generators.full_random import FullRandomGenerator
