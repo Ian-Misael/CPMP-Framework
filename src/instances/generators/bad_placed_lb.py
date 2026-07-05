@@ -146,11 +146,11 @@ class BadPlacedUniformGenerator(InstanceGenerator):
         return stacks
     
     def generate_instances(self, amount):
-        for LB in range(self.S, self.S * (self.H - 3) + 1):
+        for LB in range(1, self.S * (self.H - 3) + 1):
             if LB == self.S * (self.H - 3):
                 curr_amount = amount - len(self.instances)
             else:
-                curr_amount = amount // (self.S * (self.H - 3) - self.S)
+                curr_amount = amount // (self.S * (self.H - 3) - 1)
                 
             count = 0
             while count < curr_amount:

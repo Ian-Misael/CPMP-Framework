@@ -19,7 +19,7 @@ class FRGSolver(Solver):
         return results
 
     @staticmethod
-    def solve_from_layout(layout, H, max_steps):
+    def solve_from_layout(layout, H, max_steps, return_steps=False):
         pid = os.getpid()
         filepath = INSTANCE_FOLDER / f"tmp_{pid}.txt"
 
@@ -33,8 +33,16 @@ class FRGSolver(Solver):
                 capture_output=True
             )
             
-            output_str = result.stdout.split('\t')
+            output_str = result.stdout.strip().split('\n')
+
+            if return_steps:
+                steps = []
+                for line in output_str[1:]:
+                    line = line.split(',')
+                    steps.append((int(line[0]), int(line[1])))
+                return steps
             
+            output_str = output_str[0].split('\t')
             steps_str = output_str[0].strip()
             if not steps_str.isdigit():
                 solved = False

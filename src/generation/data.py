@@ -40,7 +40,7 @@ def get_moves_costs(layout, H, max_steps):
         if not solved: 
             continue
 
-        if cost < min_cost:
+        if cost + 1 < min_cost:
             min_cost = cost + 1
             
         all_moves_costs.append((move, cost + 1))
