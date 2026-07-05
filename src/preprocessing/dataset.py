@@ -6,7 +6,7 @@ import os
 import numpy as np
 
 class H5Dataset(Dataset):
-    def __init__(self, filepath, max_size=None):
+    def __init__(self, filepath, max_size=None, beta=0.5): # NUEVO: agregado parámetro beta
         self.filepath = filepath
         self.name = os.path.basename(filepath)
         self.file = None
@@ -17,6 +17,26 @@ class H5Dataset(Dataset):
             
             total_len = len(f['input'][self.input_keys[0]])
             self.dataset_len = total_len if max_size is None else min(total_len, max_size)
+            
+            # --- NUEVO: Lógica de pesos por frecuencia suavizada ---
+            # Leemos los costos solo una vez para calcular estadísticas
+            costs = f['C'][:self.dataset_len]
+            unique_costs, counts = np.unique(costs, return_counts=True)
+            
+            # Fórmula de inversa suavizada: w = 1 / (f^beta)
+            weights = 1.0 / (counts ** beta)
+            
+            # Multiplicamos cada peso por su frecuencia, sumamos todo, 
+            # y dividimos por el total de muestras del dataset.
+            mean_weight_in_dataset = np.sum(weights * counts) / np.sum(counts)
+            weights = weights / mean_weight_in_dataset
+            
+            # Creamos un array para mapeo rápido (costo -> peso)
+            max_cost = int(np.max(unique_costs))
+            self.cost_to_weight = np.ones(max_cost + 1, dtype=np.float32)
+            for cost, weight in zip(unique_costs, weights):
+                self.cost_to_weight[int(cost)] = weight
+            # --------------------------------------------------------
 
     def _open_file(self):
         self.file = h5py.File(self.filepath, "r")
@@ -25,7 +45,6 @@ class H5Dataset(Dataset):
         self.cost_dataset = self.file['C']
         
     def _to_tensor(self, val):
-        """Helper para convertir datos a tensores de forma eficiente"""
         if isinstance(val, np.ndarray):
             return torch.from_numpy(val)
         return torch.tensor(val)
@@ -36,7 +55,13 @@ class H5Dataset(Dataset):
             
         inputs = [self._to_tensor(self.input_datasets[k][idx]) for k in self.input_keys]
         outputs = [self._to_tensor(self.output_datasets[k][idx]) for k in self.output_keys]
-        return tuple(inputs), tuple(outputs)
+        
+        # NUEVO: Obtenemos el costo de esta muestra y buscamos su peso
+        cost = int(self.cost_dataset[idx])
+        weight = torch.tensor(self.cost_to_weight[cost], dtype=torch.float32)
+        
+        # NUEVO: Devolvemos una tupla de 3 elementos (inputs, outputs, peso)
+        return tuple(inputs), tuple(outputs), weight
     
     def __len__(self):
         return self.dataset_len

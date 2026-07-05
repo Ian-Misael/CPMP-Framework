@@ -1,4 +1,5 @@
-from torch.utils.data import random_split, DataLoader
+from torch.utils.data import DataLoader, Subset
+from sklearn.model_selection import train_test_split
 import torch
 import os
 import copy
@@ -12,6 +13,7 @@ from preprocessing.dataset import load_dataset
 import torch.multiprocessing as mp
 import numpy as np
 from utils.utils import distribuir_suma_exacta
+import h5py
     
 class ModelScorer:
     def __init__(self, model):
@@ -51,15 +53,15 @@ class ModelScorer:
     def get_last_update_epoch(self, metric):
         return self.best_models[metric]["epoch"]
     
-def train_epoch(model, train_loader, optimizer, loss_functions, metrics_list, device, scaler):
-    """
-    metrics_list: Lista de listas. metrics_list[i] son las métricas para la salida i.
-    """
+def train_epoch(model, train_loader, optimizer, loss_functions, metrics_list, device, scaler, use_weights): # NUEVO: use_weights
     model.train()
 
-    for inputs_batch, y_batch in train_loader:
+    for inputs_batch, y_batch, weights_batch in train_loader:
         inputs = [i.to(device, non_blocking=True) for i in inputs_batch]
         targets = [t.to(device, non_blocking=True) for t in y_batch]
+        
+        # NUEVO: Evaluamos si usamos los pesos o pasamos None
+        weights = weights_batch.to(device, non_blocking=True) if use_weights else None
 
         optimizer.zero_grad(set_to_none=True)
 
@@ -69,12 +71,10 @@ def train_epoch(model, train_loader, optimizer, loss_functions, metrics_list, de
                 logits_list = [logits_list]
 
             total_loss = 0
-            # Iteramos por cada salida del modelo
             for i, (lf, logits, target) in enumerate(zip(loss_functions, logits_list, targets)):
-                # 1. Pérdida
-                total_loss += lf.step(logits, target)
+                # NUEVO: Pasamos weights (puede ser el tensor o None)
+                total_loss += lf.step(logits, target, weights)
                 
-                # 2. Métricas específicas de esta salida
                 for metric in metrics_list[i]:
                     metric.step(logits, target)
 
@@ -82,26 +82,29 @@ def train_epoch(model, train_loader, optimizer, loss_functions, metrics_list, de
         scaler.step(optimizer)
         scaler.update()
 
-    # Computar resultados finales de la época
     losses = [lf.compute() for lf in loss_functions]
     m_values = [[m.compute() for m in m_sublist] for m_sublist in metrics_list]
     
     return losses, m_values
 
-def val_epoch(model, val_loader, loss_functions, metrics_list, device):
+def val_epoch(model, val_loader, loss_functions, metrics_list, device, use_weights): # NUEVO: use_weights
     model.eval()
 
     with torch.no_grad():
-        for inputs_batch, y_batch in val_loader:
+        for inputs_batch, y_batch, weights_batch in val_loader:
             inputs = [i.to(device, non_blocking=True) for i in inputs_batch]
             targets = [t.to(device, non_blocking=True) for t in y_batch]
+            
+            # NUEVO
+            weights = weights_batch.to(device, non_blocking=True) if use_weights else None
 
             logits_list = model(*inputs)
             if not isinstance(logits_list, (list, tuple)):
                 logits_list = [logits_list]
 
             for i, (lf, logits, target) in enumerate(zip(loss_functions, logits_list, targets)):
-                lf.step(logits, target)
+                # NUEVO
+                lf.step(logits, target, weights)
                 for metric in metrics_list[i]:
                     metric.step(logits, target)
 
@@ -110,7 +113,7 @@ def val_epoch(model, val_loader, loss_functions, metrics_list, device):
     
     return losses, m_values
 
-def _train(model, epochs, train_set, test_set, batch_size, learning_rate, weight_decay, loss_functions, print_epoch_results, model_scorer, patience, metrics_list, device): 
+def _train(model, epochs, train_set, test_set, batch_size, learning_rate, weight_decay, loss_functions, print_epoch_results, model_scorer, patience, metrics_list, device, use_weights): # NUEVO
     num_workers = os.cpu_count()
     use_pin_memory = device.type in ['cuda', 'mps']
 
@@ -125,17 +128,18 @@ def _train(model, epochs, train_set, test_set, batch_size, learning_rate, weight
 
     for epoch in range(1, epochs + 1):
         # --- TRAIN ---
-        train_loss_vals, train_m_vals = train_epoch(model, train_loader, optimizer, loss_functions, metrics_list, device, scaler)
+        # NUEVO: Pasamos use_weights
+        train_loss_vals, train_m_vals = train_epoch(model, train_loader, optimizer, loss_functions, metrics_list, device, scaler, use_weights)
         
         for lf, val in zip(loss_functions, train_loss_vals): 
             train_metrics.add_value(lf, val)
-        # Añadir métricas (aplanando la lista de listas)
         for i, sublist in enumerate(train_m_vals):
             for j, val in enumerate(sublist):
                 train_metrics.add_value(metrics_list[i][j], val)
 
         # --- VAL ---
-        val_loss_vals, val_m_vals = val_epoch(model, test_loader, loss_functions, metrics_list, device)
+        # NUEVO: Pasamos use_weights
+        val_loss_vals, val_m_vals = val_epoch(model, test_loader, loss_functions, metrics_list, device, use_weights)
         
         for lf, val in zip(loss_functions, val_loss_vals): 
             val_metrics.add_value(lf, val)
@@ -152,17 +156,121 @@ def _train(model, epochs, train_set, test_set, batch_size, learning_rate, weight
 
     return train_metrics, val_metrics
 
-def generate_sets(dataset, train_size, test_size, seed):
-    generator = torch.Generator().manual_seed(seed)
-    remaining_size = len(dataset) - train_size - test_size
+def print_weight_statistics(dataset):
+    """
+    Imprime estadísticas detalladas sobre cómo los pesos afectarán 
+    la función de pérdida durante una época completa.
+    """
+    print("\n" + "="*50)
+    print("📊 ANÁLISIS DE PONDERACIÓN Y BALANCE DE CLASES")
+    print("="*50)
+    
+    # 1. Leer costos reales del dataset
+    with h5py.File(dataset.filepath, 'r') as f:
+        costs = np.array(f['C'][:dataset.dataset_len])
+        
+    unique_costs, counts = np.unique(costs, return_counts=True)
+    total_samples = len(costs)
+    
+    # 2. Análisis de Extremos (El caso más común vs el más raro)
+    most_freq_idx = np.argmax(counts)
+    least_freq_idx = np.argmin(counts)
+    
+    c_comun = int(unique_costs[most_freq_idx])
+    c_raro = int(unique_costs[least_freq_idx])
+    
+    w_comun = dataset.cost_to_weight[c_comun]
+    w_raro = dataset.cost_to_weight[c_raro]
+    
+    print(f"• Total de instancias CPMP: {total_samples}")
+    print(f"• Costo más común ({c_comun} pasos): {counts[most_freq_idx]} muestras -> Multiplicador Loss: {w_comun:.4f}")
+    print(f"• Costo más raro ({c_raro} pasos) : {counts[least_freq_idx]} muestras -> Multiplicador Loss: {w_raro:.4f}")
+    print(f"• Impacto relativo: 1 instancia de costo {c_raro} vale por {w_raro/w_comun:.1f} instancias de costo {c_comun}\n")
 
-    train_set, test_set, _ = random_split(
-        dataset, 
-        [train_size, test_size, remaining_size],
-        generator=generator
+    # 3. Análisis Acumulado (Dónde se concentra el gradiente)
+    # Calculamos el "peso total" o "masa de gradiente" de cada clase en una época
+    total_weight_per_class = counts * np.array([dataset.cost_to_weight[int(c)] for c in unique_costs])
+    total_epoch_weight = np.sum(total_weight_per_class)
+    
+    # Ordenar por costo para ver la distribución de izquierda a derecha
+    sorted_indices = np.argsort(unique_costs)
+    sorted_costs = unique_costs[sorted_indices]
+    sorted_weights_mass = total_weight_per_class[sorted_indices]
+    sorted_counts = counts[sorted_indices]
+    
+    # Calcular porcentajes acumulados
+    cum_samples = np.cumsum(sorted_counts) / total_samples
+    cum_weights = np.cumsum(sorted_weights_mass) / total_epoch_weight
+    
+    print("📈 Distribución Acumulada (Rango de Costos -> % Muestras -> % Gradiente):")
+    thresholds = [0.25, 0.50, 0.75, 0.90, 1.0]
+    t_idx = 0
+    
+    for cost, c_samp, c_weight in zip(sorted_costs, cum_samples, cum_weights):
+        if t_idx < len(thresholds) and c_weight >= thresholds[t_idx]:
+            print(f"  Rango [ 1 a {int(cost):2d} pasos ]: Contiene el {c_samp*100:5.1f}% de los datos | Domina el {c_weight*100:5.1f}% de la pérdida")
+            t_idx += 1
+            
+    print("="*50 + "\n")
+
+def generate_sets(dataset, train_size, test_size, seed):
+    with h5py.File(dataset.filepath, 'r') as f:
+        costs = np.array(f['C'][:dataset.dataset_len])
+    
+    indices = np.arange(len(dataset))
+    used_size = train_size + test_size
+    
+    def get_safe_labels(labels):
+        """
+        Función auxiliar que agrupa dinámicamente cualquier clase 
+        con menos de 2 muestras justo antes de un split.
+        """
+        safe = labels.copy()
+        unique, counts = np.unique(safe, return_counts=True)
+        rare = unique[counts < 2]
+        
+        # 1. Agrupar todas las clases con 1 sola muestra bajo la etiqueta -1
+        for r in rare:
+            safe[safe == r] = -1
+            
+        # 2. Salvaguarda: Si el grupo '-1' en su totalidad solo suma 1 muestra,
+        # lo fusionamos con la clase mayoritaria de este subconjunto.
+        if 0 < np.sum(safe == -1) < 2:
+            valid_mask = unique != -1
+            if np.any(valid_mask):
+                most_freq = unique[valid_mask][np.argmax(counts[valid_mask])]
+                safe[safe == -1] = most_freq
+                
+        return safe
+
+    # --- PASO A: Extraer la porción útil (train + test) y descartar el resto ---
+    if used_size < len(dataset):
+        safe_labels_A = get_safe_labels(costs)
+        # Observa que aquí recuperamos "used_costs" intactos (sin el -1) 
+        # para pasarlos al siguiente nivel
+        used_idx, _, used_costs, _ = train_test_split(
+            indices, costs, 
+            train_size=used_size, 
+            stratify=safe_labels_A, 
+            random_state=seed
+        )
+    else:
+        used_idx = indices
+        used_costs = costs
+
+    # --- PASO B: Dividir la porción útil en train y test ---
+    # Al haber recortado los datos, used_costs puede tener nuevas clases con 1 muestra.
+    # Volvemos a generar etiquetas seguras exclusivas para este nuevo subconjunto.
+    safe_labels_B = get_safe_labels(used_costs)
+    
+    train_idx, test_idx = train_test_split(
+        used_idx, 
+        train_size=train_size, 
+        stratify=safe_labels_B, 
+        random_state=seed
     )
 
-    return train_set, test_set
+    return Subset(dataset, train_idx), Subset(dataset, test_idx)
 
 def config_training(model, seed):
     random.seed(seed)
@@ -176,7 +284,7 @@ def config_training(model, seed):
     model = model.to(device)
     return device
 
-def train(model, epochs, train_set, test_set, batch_size, learning_rate, weight_decay, loss_functions, patience, metrics, device):
+def train(model, epochs, train_set, test_set, batch_size, learning_rate, weight_decay, loss_functions, patience, metrics, device, use_weights):
     model_scorer = ModelScorer(model)
     primary_loss = loss_functions[0]
 
@@ -196,17 +304,22 @@ def train(model, epochs, train_set, test_set, batch_size, learning_rate, weight_
             print(f"{' | ' if i > 0 else '    '}{metric.name}: {metric.format(value)}", end='')
         print()
 
-    _train(model, epochs, train_set, test_set, batch_size, learning_rate, weight_decay, loss_functions, print_epoch_results, model_scorer, patience, metrics, device)
+    # NUEVO: Pasamos use_weights a _train
+    _train(model, epochs, train_set, test_set, batch_size, learning_rate, weight_decay, loss_functions, print_epoch_results, model_scorer, patience, metrics, device, use_weights)
     weights = model_scorer.get_best_weights_by_metric(primary_loss)
     model.load_state_dict(weights)
     model_scorer.print_best_score(primary_loss)
 
     return model
 
-def sl_train(model, epochs, dataset, train_size, test_size, batch_size, learning_rate, weight_decay, loss_functions, patience, metrics, seed=42):
+def sl_train(model, epochs, dataset, train_size, test_size, batch_size, learning_rate, weight_decay, loss_functions, patience, metrics, seed=42, use_weights=False):
     device = config_training(model, seed)
     train_set, test_set = generate_sets(dataset, train_size, test_size, seed)
-    return train(model, epochs, train_set, test_set, batch_size, learning_rate, weight_decay, loss_functions, patience, metrics, device)
+
+    if use_weights:
+        print_weight_statistics(dataset)
+
+    return train(model, epochs, train_set, test_set, batch_size, learning_rate, weight_decay, loss_functions, patience, metrics, device, use_weights)
 
 class DataGenerationConfigRL():
     def __init__(self, instance_sets, H, max_steps, input_adapter_config, output_adapter_config, num_workers):

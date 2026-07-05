@@ -39,6 +39,45 @@ class Metric(ABC):
 
     def format(self, value):
         return f"{value:.2f}"
+
+class LossFunction(Metric):
+    def __init__(self, name):
+        super().__init__(name, False)
+
+    def reset(self):
+        self.total_samples = 0
+        self.total_loss = 0.0
+    
+    def _compute_unreduced(self, logits, y):
+        """
+        Debe ser implementado por las subclases. 
+        Obligatoriamente debe retornar un tensor de tamaño [Batch_Size].
+        """
+        raise NotImplementedError
+
+    def step(self, logits, y, weights=None):
+        # 1. Obtenemos el loss independiente para cada muestra del batch
+        loss_per_sample = self._compute_unreduced(logits, y)
+        
+        # 2. Aplicamos la ponderación si se proporcionaron pesos
+        if weights is not None:
+            weighted_loss = (loss_per_sample * weights).mean()
+        else:
+            weighted_loss = loss_per_sample.mean()
+
+        # 3. Acumulamos para el cálculo final de la época
+        batch_size = y.size(0)
+        self.total_loss += weighted_loss.item() * batch_size 
+        self.total_samples += batch_size
+        
+        return weighted_loss
+
+    def _compute(self):
+        if self.total_samples == 0: return 0.0
+        return self.total_loss / self.total_samples
+    
+    def format(self, value):
+        return f"{value:.4f}"
     
 class Accuracy(Metric):
     def __init__(self):
@@ -72,51 +111,22 @@ class Accuracy(Metric):
     def format(self, value):
         return f"{value:.2f}%"
     
-class CrossEntropyLoss(Metric):
+class CrossEntropyLoss(LossFunction):
     def __init__(self):
-        super().__init__("CrossEntropy", False)
+        super().__init__("CrossEntropy")
 
-    def reset(self):
-        self.total_samples = 0
-        self.total_ce = 0
-    
-    def step(self, logits, y):
+    def _compute_unreduced(self, logits, y):
         y = y / y.sum(dim=1, keepdim=True)
-        ce = torch.nn.functional.cross_entropy(logits, y)
-        batch_size = y.size(0)
-        self.total_ce += ce.item() * batch_size 
-        self.total_samples += batch_size
-        return ce
+        # Usamos reduction='none' para que no devuelva la media automáticamente
+        return torch.nn.functional.cross_entropy(logits, y, reduction='none')
 
-    def _compute(self):
-        return self.total_ce / self.total_samples
-    
-    def format(self, value):
-        return f"{value:.4f}"
-    
-class MSE(Metric):
+class MSE(LossFunction):
     def __init__(self):
-        super().__init__("MSE", False)
+        super().__init__("MSE")
 
-    def reset(self):
-        self.total_samples = 0
-        self.total_mse = 0
-    
-    def step(self, logits, y):
-        mse = torch.nn.functional.mse_loss(logits, y.float())
-        
-        batch_size = y.size(0)
-        self.total_mse += mse.item() * batch_size
-        self.total_samples += batch_size
-        
-        return mse
-
-    def _compute(self):
-        if self.total_samples == 0: return 0.0
-        return self.total_mse / self.total_samples
-    
-    def format(self, value):
-        return f"{value:.4f}"
+    def _compute_unreduced(self, logits, y):
+        unreduced_mse = torch.nn.functional.mse_loss(logits, y.float(), reduction='none')
+        return unreduced_mse
     
 class ExpMSE(Metric):
     def __init__(self):
