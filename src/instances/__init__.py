@@ -40,7 +40,7 @@ def get_cost_distribution(folder, H):
 
     for file in os.listdir(INSTANCE_FOLDER / folder):
         layout = read_instance(os.path.join(folder, file), H)
-        _, cost = solver.solve_from_layout(layout, H, 999999)
+        _, cost, _ = solver.solve_from_layout(layout, H, 999999)
         costs.append(cost)
 
     return costs
