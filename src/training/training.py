@@ -356,7 +356,7 @@ def split_instances(folders, train_size, test_size, seed):
 
     return train_instances, test_instances
 
-def rl_train(model, iterations, datagen_config, epochs, train_size, test_size, batch_size, learning_rate, weight_decay, loss_functions, patience, metrics, seed=42):
+def rl_train(model, iterations, datagen_config, epochs, train_size, test_size, batch_size, learning_rate, weight_decay, loss_functions, patience, metrics, seed=42, use_weights=False):
     device = config_training(model, seed)
     train_set_file = "tmp_train.data"
     test_set_file = "tmp_test.data"
@@ -423,7 +423,7 @@ def rl_train(model, iterations, datagen_config, epochs, train_size, test_size, b
             best_weights = model.state_dict()
 
             if i == iterations: break
-            model = train(model, epochs, train_set, test_set, batch_size, learning_rate, weight_decay, loss_functions, patience, metrics, device)
+            model = train(model, epochs, train_set, test_set, batch_size, learning_rate, weight_decay, loss_functions, patience, metrics, device, use_weights)
             i += 1
 
         model.load_state_dict(best_weights)

@@ -119,6 +119,17 @@ class CrossEntropyLoss(LossFunction):
         y = y / y.sum(dim=1, keepdim=True)
         # Usamos reduction='none' para que no devuelva la media automáticamente
         return torch.nn.functional.cross_entropy(logits, y, reduction='none')
+    
+class BinaryCrossEntropyLoss(LossFunction):
+    def __init__(self):
+        super().__init__("BinaryCrossEntropy")
+
+    def _compute_unreduced(self, logits, y):
+        # BCE exige que el target (y) sea float
+        y = y.float()
+        
+        # Devuelve un tensor de tamaño [Batch_Size] directamente
+        return torch.nn.functional.binary_cross_entropy_with_logits(logits, y, reduction='none')
 
 class MSE(LossFunction):
     def __init__(self):
