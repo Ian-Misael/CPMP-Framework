@@ -393,15 +393,27 @@ def rl_train(model, iterations, datagen_config, epochs, train_size, test_size, b
             train_set = load_dataset(train_set_file, verbose=False)
             test_set = load_dataset(test_set_file, verbose=False)
 
+            # EXTRAEMOS DATOS DE TRAIN
             train_set._open_file()
-            avg_cost_train = np.mean(train_set.file['C'])
+            # Leemos el dataset como arreglo a memoria con [:]
+            real_costs_train = train_set.file['realCost'][:] 
+            # np.nanmean calcula el promedio ignorando los NaN
+            avg_cost_train = np.nanmean(real_costs_train)
+            # Contamos cuántos elementos NO son NaN
+            solved_train = np.count_nonzero(~np.isnan(real_costs_train))
+            total_train = len(real_costs_train)
             train_set.close()
 
+            # EXTRAEMOS DATOS DE TEST
             test_set._open_file()
-            avg_cost_test = np.mean(test_set.file['C'])
+            real_costs_test = test_set.file['realCost'][:]
+            avg_cost_test = np.nanmean(real_costs_test)
+            solved_test = np.count_nonzero(~np.isnan(real_costs_test))
+            total_test = len(real_costs_test)
             test_set.close()
 
             print(f"Tamaño datasets | Train: {len(train_set)} | Test: {len(test_set)}")
+            print(f"Instancias resueltas | Train: {solved_train}/{total_train} ({(solved_train/total_train)*100:.1f}%) | Test: {solved_test}/{total_test} ({(solved_test/total_test)*100:.1f}%)")
             print(f"Costo promedio | Train: {avg_cost_train:.2f} | Test: {avg_cost_test:.2f}")
 
             if last_avg_cost_test:
@@ -431,7 +443,7 @@ def rl_train(model, iterations, datagen_config, epochs, train_size, test_size, b
     
     finally:
         if os.path.exists(train_set_file):
-            os.remove(test_set_file)
+            os.remove(train_set_file)
         if os.path.exists(test_set_file):
             os.remove(test_set_file)
 

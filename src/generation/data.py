@@ -60,7 +60,12 @@ def generate_data_from_file(filepath):
 
     output_vec = worker_ma_adapter.output_2_vec(moves_costs)
 
-    return input_vec, output_vec, best_cost
+    # NUEVO: Obtenemos el costo real evaluando el layout actual directamente
+    solved, cost, _ = worker_solver.solve_from_layout(layout, worker_H, worker_max_steps)
+    real_cost = cost if solved else np.nan
+
+    # Retornamos real_cost como 4to elemento
+    return input_vec, output_vec, best_cost, real_cost
 
 def generate_data(filepaths, input_adapter, output_adapter, init_worker, init_args, num_workers):
     with ProcessPoolExecutor(
@@ -76,21 +81,23 @@ def generate_data(filepaths, input_adapter, output_adapter, init_worker, init_ar
     output_adapter = ma_class(*ma_args)
 
     costs = []
+    real_costs = [] # NUEVO
     for result in results:
         if result is None:
             continue
 
-        input_vec, output_vec, cost = result
+        input_vec, output_vec, cost, real_cost = result # MODIFICADO: Desempaquetado de 4 valores
         input_adapter.add(input_vec)
         output_adapter.add(output_vec)
         costs.append(cost)
+        real_costs.append(real_cost) # NUEVO
 
     input_data = input_adapter.get()
     output_data = output_adapter.get()
 
-    return input_data, output_data, costs
+    return input_data, output_data, costs, real_costs # MODIFICADO
 
-def save_data(input_data, output_data, costs, output_name):
+def save_data(input_data, output_data, costs, output_name, real_costs=None): 
     output_path = DATA_FOLDER / f"{output_name}"
 
     with h5py.File(output_path, "w") as f:
@@ -108,6 +115,10 @@ def save_data(input_data, output_data, costs, output_name):
         g_output.attrs['key_order'] = [k for k in output_keys]
 
         f.create_dataset("C", data=np.stack(costs, dtype=np.int32))
+        
+        # MODIFICADO: Cambiamos a np.float32 para poder almacenar np.nan
+        if real_costs is not None:
+            f.create_dataset("realCost", data=np.stack(real_costs, dtype=np.float32))
 
     print(f"Datos guardados en: {output_path} (Tamaño {len(output_data[key])})")
 
@@ -134,20 +145,17 @@ def init_worker_sl(H, max_steps, input_adapter_config, output_adapter_config, so
     worker_solver = solver_class(*solver_args)
 
 def generate_data_sl(folder, H, max_steps, input_adapter_config, output_adapter_config, solver_config, num_workers, output_name_prefix=None):
-    # Agrupamos los argumentos de inicialización
     init_args = (H, max_steps, input_adapter_config, output_adapter_config, solver_config)
     
-    # Construimos las rutas de las instancias dentro de la carpeta seleccionada
     folder_path = INSTANCE_FOLDER / folder
     instance_files = [os.path.join(folder_path, f) for f in os.listdir(folder_path)]
     
-    # Definimos el nombre del archivo de salida
     output_name = f"{folder}.data"
     if output_name_prefix:
         output_name = f"{output_name_prefix}_{output_name}"
     
-    # Ejecutamos la generación de datos para la carpeta específica
-    input_data, output_data, costs = generate_data(
+    # MODIFICADO: Ignoramos la variable real_costs (el 4to valor de retorno) usando "_"
+    input_data, output_data, costs, _ = generate_data(
         instance_files, 
         input_adapter_config, 
         output_adapter_config, 
@@ -156,7 +164,7 @@ def generate_data_sl(folder, H, max_steps, input_adapter_config, output_adapter_
         num_workers
     )
     
-    # Guardamos los resultados
+    # save_data se llama igual, manteniendo la compatibilidad hacia atrás para SL
     save_data(input_data, output_data, costs, output_name)
     
 def init_worker_rl(H, max_steps, model_cls, model_params, weights, input_adapter_config, output_adapter_config, batch_size):
@@ -179,13 +187,14 @@ def generate_data_rl(instance_files, H, max_steps, input_adapter_config, output_
     temp_inputs = {}
     temp_outputs = {}
     all_costs = []
+    all_real_costs = [] # NUEVO
 
     for files, H_file in zip(instance_files, H):
         init_args = (H_file, max_steps, model_cls, model_params, weights, input_adapter_config, output_adapter_config, batch_size)
 
-        input_data, output_data, costs = generate_data(files, input_adapter_config, output_adapter_config, init_worker_rl, init_args, num_workers)
+        # MODIFICADO: Recibimos real_costs
+        input_data, output_data, costs, real_costs = generate_data(files, input_adapter_config, output_adapter_config, init_worker_rl, init_args, num_workers)
         
-        # Agrupamos los diccionarios en listas de arrays
         for k, v in input_data.items():
             temp_inputs.setdefault(k, []).append(v)
         
@@ -193,11 +202,13 @@ def generate_data_rl(instance_files, H, max_steps, input_adapter_config, output_
             temp_outputs.setdefault(k, []).append(v)
             
         all_costs.extend(costs)
+        all_real_costs.extend(real_costs) # NUEVO
 
     all_input_data = {k: np.concatenate(v) for k, v in temp_inputs.items()}
     all_output_data = {k: np.concatenate(v) for k, v in temp_outputs.items()}
 
-    save_data(all_input_data, all_output_data, all_costs, output_name)
+    # MODIFICADO: Pasamos el argumento adicional de real_costs
+    save_data(all_input_data, all_output_data, all_costs, output_name, real_costs=all_real_costs)
 
 def split_instances(folder, p1, p2, seed):
     # 1. Preparación de archivos
