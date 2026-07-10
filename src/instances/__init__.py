@@ -34,6 +34,15 @@ def read_instance(file, H):
         layout = Layout(stacks,H)
     return layout
 
+def get_instance_files(folders):
+    files = []
+    for folder in folders:
+        folder_files = []
+        for file in os.listdir(INSTANCE_FOLDER / folder):
+            folder_files.append(os.path.join(folder, file))
+        files.append(folder_files)
+    return files
+
 def get_cost_distribution(folder, H):
     costs = []
     solver = FRGSolver()

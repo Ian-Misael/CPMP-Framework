@@ -7,8 +7,9 @@ class CostAdapter(OutputAdapter):
             "cost": np.float32
         })
     
-    def output_2_vec(self, moves, cost):
-        return np.log(cost)
+    def output_2_vec(self, moves_cost):
+        min_cost = min(cost for move, cost in moves_cost)
+        return np.log(min_cost)
     
     def add(self, output_data):
         cost = output_data

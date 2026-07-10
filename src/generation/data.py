@@ -60,20 +60,33 @@ def generate_data_from_file(filepath):
 
     output_vec = worker_ma_adapter.output_2_vec(moves_costs)
 
-    # NUEVO: Obtenemos el costo real evaluando el layout actual directamente
+    # Obtenemos el costo real evaluando el layout actual directamente
     solved, cost, _ = worker_solver.solve_from_layout(layout, worker_H, worker_max_steps)
     real_cost = cost if solved else np.nan
 
-    # Retornamos real_cost como 4to elemento
     return input_vec, output_vec, best_cost, real_cost
 
-def generate_data(filepaths, input_adapter, output_adapter, init_worker, init_args, num_workers):
+def generate_data(filepaths, input_adapter, output_adapter, init_worker, init_args, num_workers, verbose=False):
+    if num_workers is None:
+        num_workers = os.cpu_count()
+
+    total_files = len(filepaths)
+    if verbose:
+        print(f"Iniciando generación de datos para {total_files} archivos con {num_workers} workers...")
+
+    results = []
     with ProcessPoolExecutor(
         max_workers=num_workers,
         initializer=init_worker,
         initargs=init_args
     ) as executor:
-        results = list(executor.map(generate_data_from_file, filepaths))
+        # Iteramos sobre el generador en lugar de empaquetarlo en list() de golpe
+        for i, result in enumerate(executor.map(generate_data_from_file, filepaths), 1):
+            results.append(result)
+            
+            # Imprime el progreso cada 10% o cuando llegue al último archivo
+            if verbose and (i % max(1, total_files // 10) == 0 or i == total_files):
+                print(f"Progreso: {i}/{total_files} archivos procesados.")
 
     la_class, *la_args = input_adapter
     ma_class, *ma_args = output_adapter
@@ -81,21 +94,23 @@ def generate_data(filepaths, input_adapter, output_adapter, init_worker, init_ar
     output_adapter = ma_class(*ma_args)
 
     costs = []
-    real_costs = [] # NUEVO
+    real_costs = []
     for result in results:
         if result is None:
             continue
 
-        input_vec, output_vec, cost, real_cost = result # MODIFICADO: Desempaquetado de 4 valores
+        input_vec, output_vec, cost, real_cost = result
         input_adapter.add(input_vec)
         output_adapter.add(output_vec)
         costs.append(cost)
-        real_costs.append(real_cost) # NUEVO
+        real_costs.append(real_cost)
 
     input_data = input_adapter.get()
     output_data = output_adapter.get()
 
-    return input_data, output_data, costs, real_costs # MODIFICADO
+    if verbose:
+        print("Generación de datos finalizada con éxito.")
+    return input_data, output_data, costs, real_costs
 
 def save_data(input_data, output_data, costs, output_name, real_costs=None): 
     output_path = DATA_FOLDER / f"{output_name}"
@@ -161,7 +176,8 @@ def generate_data_sl(folder, H, max_steps, input_adapter_config, output_adapter_
         output_adapter_config, 
         init_worker_sl, 
         init_args, 
-        num_workers
+        num_workers,
+        verbose=True
     )
     
     # save_data se llama igual, manteniendo la compatibilidad hacia atrás para SL
@@ -179,7 +195,7 @@ def init_worker_rl(H, max_steps, model_cls, model_params, weights, input_adapter
     model.eval()
     worker_solver = ModelSolver(model, worker_la_adapter, batch_size)
 
-def generate_data_rl(instance_files, H, max_steps, input_adapter_config, output_adapter_config, model, batch_size, num_workers, output_name):
+def generate_data_rl(instance_files, H, max_steps, input_adapter_config, output_adapter_config, model, batch_size, num_workers, output_name, verbose=False):
     model_cls = model.__class__
     model_params = model.hyperparams
     weights = model.state_dict()
@@ -193,7 +209,7 @@ def generate_data_rl(instance_files, H, max_steps, input_adapter_config, output_
         init_args = (H_file, max_steps, model_cls, model_params, weights, input_adapter_config, output_adapter_config, batch_size)
 
         # MODIFICADO: Recibimos real_costs
-        input_data, output_data, costs, real_costs = generate_data(files, input_adapter_config, output_adapter_config, init_worker_rl, init_args, num_workers)
+        input_data, output_data, costs, real_costs = generate_data(files, input_adapter_config, output_adapter_config, init_worker_rl, init_args, num_workers, verbose)
         
         for k, v in input_data.items():
             temp_inputs.setdefault(k, []).append(v)
