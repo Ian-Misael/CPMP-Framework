@@ -58,6 +58,7 @@ class ModelScorer:
 @dataclass
 class LRConfig:
     start: float            # Tasa de aprendizaje inicial
+    factor: float = 0.5     # Factor de reducción
     patience: int = 999999  # Épocas sin mejora antes de reducir el LR
     min: float = 0.0        # Tasa de aprendizaje mínima permitida
     
@@ -131,7 +132,7 @@ def _train(model, epochs, train_set, test_set, batch_size, lr_config: LRConfig, 
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr_config.start, weight_decay=weight_decay)
     
     # Configuramos el scheduler
-    scheduler = ReduceLROnPlateau(optimizer, mode='min', patience=lr_config.patience, min_lr=lr_config.min)
+    scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=lr_config.factor, patience=lr_config.patience, min_lr=lr_config.min)
     
     scaler = GradScaler(device.type)
 
